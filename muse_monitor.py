@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -171,6 +172,7 @@ class MuseMonitor:
         self.band_timestamps: deque[float] = deque(maxlen=600)
         self.last_band_history_update = 0.0
         self.started_at = time.monotonic()
+        self.stop_requested = False
 
     def start_bridge(self) -> None:
         if self.args.external_lsl:
@@ -206,6 +208,12 @@ class MuseMonitor:
             LOGGER.warning("Muse LSL bridge did not stop; killing it.")
             self.bridge.kill()
             self.bridge.wait()
+
+    def request_shutdown(self) -> None:
+        """Request clean shutdown from a signal handler or GUI callback."""
+        if not self.stop_requested:
+            LOGGER.info("Interrupted; closing monitor.")
+        self.stop_requested = True
 
     @staticmethod
     def _find_inlet(stream_type: str) -> StreamInlet | None:
@@ -252,6 +260,10 @@ class MuseMonitor:
             self.band_history[name].append(value)
 
     def run(self) -> None:
+        def handle_interrupt(*_: object) -> None:
+            self.request_shutdown()
+
+        previous_sigint_handler = signal.signal(signal.SIGINT, handle_interrupt)
         self.start_bridge()
         figure, (eeg_axis, ppg_axis) = plt.subplots(
             2, 1, figsize=(12, 7), height_ratios=(3, 1), sharex=True
@@ -318,12 +330,15 @@ class MuseMonitor:
         band_figure.subplots_adjust(bottom=0.2)
 
         def update(_: int) -> list:
+            if self.stop_requested:
+                plt.close("all")
+                return []
+
             try:
                 self._read_streams()
             except KeyboardInterrupt:
-                LOGGER.info("Interrupted; closing monitor.")
-                self.stop_bridge()
-                plt.close(figure)
+                self.request_shutdown()
+                plt.close("all")
                 return []
 
             if self.eeg:
@@ -389,9 +404,10 @@ class MuseMonitor:
         try:
             plt.show()
         except KeyboardInterrupt:
-            LOGGER.info("Interrupted; closing monitor.")
+            self.request_shutdown()
         finally:
             self.stop_bridge()
+            signal.signal(signal.SIGINT, previous_sigint_handler)
 
 
 def parse_args() -> argparse.Namespace:

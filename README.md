@@ -66,7 +66,8 @@ uv run python muse_monitor.py --external-lsl
 ```
 
 Close the graph window or press `Ctrl+C` to stop the monitor. It terminates the
-Muse LSL child process rather than leaving a background BLE connection running.
+Muse LSL child process rather than leaving a background BLE connection running;
+the signal handler also avoids Tkinter interrupt tracebacks.
 
 See [connection notes](docs/connection.md) and
 [API and signal-processing notes](docs/api-and-signals.md) for the researched
