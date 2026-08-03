@@ -1,0 +1,12 @@
+[project]
+name = "muse-monitor"
+version = "0.1.0"
+description = "Live Muse 2 EEG and PPG heart-rate monitor"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.1",
+    "muselsl>=2.5.1",
+    "numpy>=2.5.1",
+    "scipy>=1.18.0",
+]
