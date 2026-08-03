@@ -38,6 +38,28 @@ This is a convenience estimate, not a validated clinical measurement. Movement,
 loose sensor contact, skin/hair interference, and ambient light can produce an
 incorrect rate. Do not use it for medical decisions.
 
+## EEG state heuristic
+
+After collecting eight seconds of EEG, the monitor calculates a Welch power
+spectrum for each of the four electrodes and averages their relative band
+power:
+
+| Band | Range | UI pattern label |
+| --- | ---: | --- |
+| Theta | 4–8 Hz | Theta-dominant |
+| Alpha | 8–12 Hz | Alpha-dominant (relaxed-like) |
+| Beta | 13–30 Hz | Beta-dominant (alert-like) |
+
+A label requires its band to be materially stronger than the other two;
+otherwise the UI shows `Indeterminate / mixed`. Values near the Muse's signal
+range are reported as an artifact instead of being classified.
+
+These are descriptive, real-time signal heuristics—not validated detection of
+mental state, emotion, attention, consciousness, or a medical condition. EEG
+band power varies across people and contexts, and movement, facial muscle
+activity, eye movements, electrode contact, and the signal's aperiodic
+component can all change the apparent ratios.
+
 ## Sources
 
 - Muse LSL README and source:
@@ -48,3 +70,7 @@ incorrect rate. Do not use it for medical decisions.
   <https://github.com/alexandrebarachant/muse-lsl/blob/master/muselsl/constants.py>
 - SciPy peak finder reference:
   <https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html>
+- SciPy Welch power spectral density reference:
+  <https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.welch.html>
+- Band-ratio limitation review:
+  <https://pmc.ncbi.nlm.nih.gov/articles/PMC7768281/>

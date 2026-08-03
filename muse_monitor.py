@@ -15,11 +15,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation
 from pylsl import StreamInlet, resolve_byprop
-from scipy.signal import butter, find_peaks, sosfiltfilt
+from scipy.signal import butter, find_peaks, sosfiltfilt, welch
 
 EEG_CHANNELS = ("TP9", "AF7", "AF8", "TP10")
 EEG_RATE = 256
 PPG_RATE = 64
+EEG_ANALYSIS_SECONDS = 8
+EEG_BANDS = {
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 12.0),
+    "beta": (13.0, 30.0),
+}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -41,6 +47,73 @@ def load_project_environment() -> None:
 class HeartRate:
     bpm: float | None
     confidence: float
+
+
+@dataclass
+class EegState:
+    label: str
+    detail: str
+    band_power: dict[str, float] | None
+
+
+def estimate_eeg_state(samples: np.ndarray) -> EegState:
+    """Classify the dominant theta/alpha/beta pattern in a recent EEG window."""
+    required_samples = EEG_ANALYSIS_SECONDS * EEG_RATE
+    if len(samples) < required_samples:
+        return EegState(
+            "Acquiring EEG",
+            f"Need {EEG_ANALYSIS_SECONDS} seconds of clean EEG data.",
+            None,
+        )
+
+    window = samples[-required_samples:].astype(float)
+    if np.max(np.abs(window)) > 900:
+        return EegState(
+            "Signal artifact",
+            "Large signal excursion; adjust the headband or keep still.",
+            None,
+        )
+
+    frequencies, spectrum = welch(
+        window.T, fs=EEG_RATE, nperseg=EEG_RATE * 2, axis=-1
+    )
+    power = {}
+    for name, (low, high) in EEG_BANDS.items():
+        band = (frequencies >= low) & (frequencies < high)
+        power[name] = float(np.mean(np.trapezoid(spectrum[:, band], frequencies[band])))
+
+    total_power = sum(power.values())
+    if total_power <= 0:
+        return EegState("Signal unavailable", "No usable EEG band power.", None)
+
+    relative_power = {name: value / total_power for name, value in power.items()}
+    theta = relative_power["theta"]
+    alpha = relative_power["alpha"]
+    beta = relative_power["beta"]
+
+    if alpha > beta * 1.25 and alpha > theta * 1.1:
+        return EegState(
+            "Alpha-dominant (relaxed-like)",
+            "Alpha power is strongest in this window.",
+            relative_power,
+        )
+    if beta > alpha * 1.25 and beta > theta * 1.1:
+        return EegState(
+            "Beta-dominant (alert-like)",
+            "Beta power is strongest in this window.",
+            relative_power,
+        )
+    if theta > alpha * 1.25 and theta > beta * 1.1:
+        return EegState(
+            "Theta-dominant",
+            "Theta power is strongest in this window.",
+            relative_power,
+        )
+    return EegState(
+        "Indeterminate / mixed",
+        "No theta, alpha, or beta pattern is clearly dominant.",
+        relative_power,
+    )
 
 
 def estimate_heart_rate(samples: np.ndarray) -> HeartRate:
@@ -79,7 +152,9 @@ def estimate_heart_rate(samples: np.ndarray) -> HeartRate:
 class MuseMonitor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.eeg: deque[np.ndarray] = deque(maxlen=int(args.window * EEG_RATE))
+        self.eeg: deque[np.ndarray] = deque(
+            maxlen=max(int(args.window * EEG_RATE), EEG_ANALYSIS_SECONDS * EEG_RATE)
+        )
         self.ppg: deque[float] = deque(maxlen=PPG_RATE * 20)
         self.eeg_inlet: StreamInlet | None = None
         self.ppg_inlet: StreamInlet | None = None
@@ -172,6 +247,14 @@ class MuseMonitor:
         heart_rate_text = ppg_axis.text(
             0.01, 0.88, "Heart rate: waiting for PPG...", transform=ppg_axis.transAxes
         )
+        state_text = eeg_axis.text(
+            0.01,
+            0.97,
+            "EEG state heuristic: acquiring data...",
+            transform=eeg_axis.transAxes,
+            verticalalignment="top",
+            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
+        )
 
         eeg_axis.set_ylabel("EEG (microvolts)")
         eeg_axis.legend(loc="upper right", ncols=4)
@@ -200,6 +283,14 @@ class MuseMonitor:
                 eeg_axis.relim()
                 eeg_axis.autoscale_view(scalex=False, scaley=True)
                 eeg_axis.set_title("Live EEG")
+                eeg_state = estimate_eeg_state(data)
+                state_message = f"EEG state heuristic: {eeg_state.label}"
+                if eeg_state.band_power:
+                    state_message += " | " + ", ".join(
+                        f"{name} {value:.0%}"
+                        for name, value in eeg_state.band_power.items()
+                    )
+                state_text.set_text(state_message)
             elif self.connection_error:
                 eeg_axis.set_title(self.connection_error)
 
@@ -221,7 +312,7 @@ class MuseMonitor:
                 heart_rate_text.set_text(self.connection_error)
             else:
                 heart_rate_text.set_text("Waiting for EEG and PPG LSL streams...")
-            return [*eeg_lines, ppg_line, heart_rate_text]
+            return [*eeg_lines, ppg_line, heart_rate_text, state_text]
 
         figure.tight_layout()
         self.animation = FuncAnimation(

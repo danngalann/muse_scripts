@@ -4,6 +4,11 @@ This `uv`-managed Python project connects to a Muse 2 over Bluetooth Low Energy,
 plots the four EEG channels live, and estimates heart rate from its infrared PPG
 sensor. It is a personal visualization tool, not a medical device.
 
+The UI also shows an **EEG state heuristic** from theta/alpha/beta spectral
+power. Its labels describe the dominant signal pattern (for example,
+"alpha-dominant, relaxed-like"), not a reliable measurement of your mental
+state, emotion, focus, or health.
+
 ## Quick start
 
 1. Charge and wear the headband, then close the Muse app and any other program
