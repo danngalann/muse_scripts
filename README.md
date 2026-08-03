@@ -9,6 +9,9 @@ power. Its labels describe the dominant signal pattern (for example,
 "alpha-dominant, relaxed-like"), not a reliable measurement of your mental
 state, emotion, focus, or health.
 
+A second window charts the relative theta, alpha, and beta power over time and
+includes a short interpretation legend.
+
 ## Quick start
 
 1. Charge and wear the headband, then close the Muse app and any other program

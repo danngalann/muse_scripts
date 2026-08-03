@@ -54,6 +54,10 @@ A label requires its band to be materially stronger than the other two;
 otherwise the UI shows `Indeterminate / mixed`. Values near the Muse's signal
 range are reported as an artifact instead of being classified.
 
+The separate `Muse 2 EEG band power` window records those relative values every
+half second and plots up to five minutes of history. Its legend gives common
+associations for each band but does not turn them into a diagnosis.
+
 These are descriptive, real-time signal heuristics—not validated detection of
 mental state, emotion, attention, consciousness, or a medical condition. EEG
 band power varies across people and contexts, and movement, facial muscle

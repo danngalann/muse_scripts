@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ EEG_CHANNELS = ("TP9", "AF7", "AF8", "TP10")
 EEG_RATE = 256
 PPG_RATE = 64
 EEG_ANALYSIS_SECONDS = 8
+EEG_BAND_HISTORY_INTERVAL = 0.5
 EEG_BANDS = {
     "theta": (4.0, 8.0),
     "alpha": (8.0, 12.0),
@@ -163,6 +165,12 @@ class MuseMonitor:
         self.received_ppg = False
         self.animation: FuncAnimation | None = None
         self.bridge: subprocess.Popen[bytes] | None = None
+        self.band_history: dict[str, deque[float]] = {
+            name: deque(maxlen=600) for name in EEG_BANDS
+        }
+        self.band_timestamps: deque[float] = deque(maxlen=600)
+        self.last_band_history_update = 0.0
+        self.started_at = time.monotonic()
 
     def start_bridge(self) -> None:
         if self.args.external_lsl:
@@ -232,13 +240,27 @@ class MuseMonitor:
             # Muse LSL labels PPG2 as the infrared channel, used for pulse detection.
             self.ppg.extend(float(sample[1]) for sample in samples)
 
+    def record_band_power(self, band_power: dict[str, float]) -> None:
+        """Add one spectral observation at a fixed cadence for the band chart."""
+        now = time.monotonic()
+        if now - self.last_band_history_update < EEG_BAND_HISTORY_INTERVAL:
+            return
+
+        self.last_band_history_update = now
+        self.band_timestamps.append(now - self.started_at)
+        for name, value in band_power.items():
+            self.band_history[name].append(value)
+
     def run(self) -> None:
         self.start_bridge()
         figure, (eeg_axis, ppg_axis) = plt.subplots(
             2, 1, figsize=(12, 7), height_ratios=(3, 1), sharex=True
         )
+        band_figure, band_axis = plt.subplots(figsize=(10, 5))
         if figure.canvas.manager is not None:
             figure.canvas.manager.set_window_title("Muse 2 live monitor")
+        if band_figure.canvas.manager is not None:
+            band_figure.canvas.manager.set_window_title("Muse 2 EEG band power")
         eeg_lines = [
             eeg_axis.plot([], [], linewidth=0.8, label=channel)[0]
             for channel in EEG_CHANNELS
@@ -255,6 +277,18 @@ class MuseMonitor:
             verticalalignment="top",
             bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
         )
+        band_lines = {
+            "theta": band_axis.plot([], [], label="Theta (4-8 Hz)", color="tab:purple")[0],
+            "alpha": band_axis.plot([], [], label="Alpha (8-12 Hz)", color="tab:green")[0],
+            "beta": band_axis.plot([], [], label="Beta (13-30 Hz)", color="tab:orange")[0],
+        }
+        band_waiting_text = band_axis.text(
+            0.5,
+            0.5,
+            "Waiting for 8 seconds of EEG...",
+            transform=band_axis.transAxes,
+            horizontalalignment="center",
+        )
 
         eeg_axis.set_ylabel("EEG (microvolts)")
         eeg_axis.legend(loc="upper right", ncols=4)
@@ -265,6 +299,23 @@ class MuseMonitor:
         ppg_axis.grid(alpha=0.3)
         eeg_axis.set_xlim(-self.args.window, 0)
         ppg_axis.set_xlim(-self.args.window, 0)
+        band_axis.set_title("Relative EEG band power")
+        band_axis.set_xlabel("Seconds since monitor started")
+        band_axis.set_ylabel("Relative power")
+        band_axis.set_ylim(0, 1)
+        band_axis.grid(alpha=0.3)
+        band_axis.legend(loc="upper right")
+        band_figure.text(
+            0.5,
+            0.02,
+            "Theta: often drowsiness or internal attention.  "
+            "Alpha: often relaxed wakefulness.  "
+            "Beta: often alert, active cognition.  "
+            "These patterns are non-specific and not diagnostic.",
+            horizontalalignment="center",
+            wrap=True,
+        )
+        band_figure.subplots_adjust(bottom=0.2)
 
         def update(_: int) -> list:
             try:
@@ -286,6 +337,7 @@ class MuseMonitor:
                 eeg_state = estimate_eeg_state(data)
                 state_message = f"EEG state heuristic: {eeg_state.label}"
                 if eeg_state.band_power:
+                    self.record_band_power(eeg_state.band_power)
                     state_message += " | " + ", ".join(
                         f"{name} {value:.0%}"
                         for name, value in eeg_state.band_power.items()
@@ -312,7 +364,23 @@ class MuseMonitor:
                 heart_rate_text.set_text(self.connection_error)
             else:
                 heart_rate_text.set_text("Waiting for EEG and PPG LSL streams...")
-            return [*eeg_lines, ppg_line, heart_rate_text, state_text]
+
+            if self.band_timestamps:
+                timestamps = np.asarray(self.band_timestamps)
+                for name, line in band_lines.items():
+                    line.set_data(timestamps, self.band_history[name])
+                band_axis.set_xlim(max(0, timestamps[-1] - 300), max(10, timestamps[-1]))
+                band_waiting_text.set_visible(False)
+                band_figure.canvas.draw_idle()
+
+            return [
+                *eeg_lines,
+                ppg_line,
+                heart_rate_text,
+                state_text,
+                *band_lines.values(),
+                band_waiting_text,
+            ]
 
         figure.tight_layout()
         self.animation = FuncAnimation(
